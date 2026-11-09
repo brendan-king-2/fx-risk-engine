@@ -1,0 +1,676 @@
+<title>FX Risk Engine</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a risk-desk morning report. Summary tiles, then the backtest chart that proves the model,
+   then the scorecard, then where the risk comes from (currency, scenario, correlation). */
+:root {
+  --page: #f4f5f7;
+  --surface: #fdfdfd;
+  --ink: #11151a;
+  --ink-2: #4b535e;
+  --muted: #7f8792;
+  --grid: #e4e7eb;
+  --axis: #c3c8cf;
+  --border: rgba(17, 21, 26, 0.10);
+  --accent: #2a78d6;
+  --accent-wash: rgba(42, 120, 214, 0.10);
+  --series-2: #eb6834;
+  --pnl: #b8bdc5;
+  --loss: #d03b3b;
+  --gain: #2a78d6;
+  --good: #0ca30c;
+  --good-ink: #006300;
+  --warn: #fab219;
+  --crit: #d03b3b;
+  --mid: #eceae6;
+  --font-display: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0d0f12; --surface: #16191d; --ink: #eef0f2; --ink-2: #b8bec6; --muted: #868d97;
+    --grid: #252a30; --axis: #3a4048; --border: rgba(255, 255, 255, 0.10);
+    --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.14); --series-2: #d95926; --pnl: #4b525b;
+    --loss: #e66767; --gain: #3987e5; --good-ink: #0ca30c; --mid: #383835; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0d0f12; --surface: #16191d; --ink: #eef0f2; --ink-2: #b8bec6; --muted: #868d97;
+  --grid: #252a30; --axis: #3a4048; --border: rgba(255, 255, 255, 0.10);
+  --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.14); --series-2: #d95926; --pnl: #4b525b;
+  --loss: #e66767; --gain: #3987e5; --good-ink: #0ca30c; --mid: #383835; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--page); color: var(--ink); font-family: var(--font-body);
+  font-size: 15px; line-height: 1.5; font-variation-settings: "wdth" 100;
+}
+.wrap {
+  max-width: 1180px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 56px;
+  display: grid; gap: 20px;
+}
+h1, h2, h3 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(28px, 4.2vw, 40px); font-weight: 800; letter-spacing: -0.02em; font-variation-settings: "wdth" 78; line-height: 1.05; }
+h2 { font-size: 18px; font-weight: 700; letter-spacing: -0.005em; }
+h3 { font-size: 15px; font-weight: 650; }
+p { margin: 0; }
+.eyebrow { font-family: var(--font-data); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.sub { color: var(--ink-2); max-width: 72ch; }
+.muted { color: var(--muted); }
+
+header { display: grid; gap: 10px; padding-bottom: 4px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-family: var(--font-data); font-size: 12.5px; color: var(--ink-2); }
+.meta span b { color: var(--ink); font-weight: 500; }
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; min-width: 0; display: grid; gap: 14px; align-content: start; }
+.panel-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 10px 16px; }
+.panel-head > div { display: grid; gap: 4px; min-width: 0; }
+.panel-head p { color: var(--ink-2); font-size: 13.5px; max-width: 70ch; }
+
+/* KPI strip */
+.kpis { display: grid; grid-template-columns: 1.35fr 1fr 1fr 1fr; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.kpi { padding: 18px 20px; display: grid; gap: 4px; align-content: start; min-width: 0; }
+.kpi + .kpi { border-left: 1px solid var(--grid); }
+.kpi .label { font-size: 13px; color: var(--ink-2); }
+.kpi .value { font-family: var(--font-display); font-weight: 750; font-size: 30px; letter-spacing: -0.02em; line-height: 1.1; font-variation-settings: "wdth" 85; }
+.kpi.hero .value { font-size: 50px; }
+.kpi .note { font-size: 12.5px; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-data); font-size: 12px; padding: 2px 9px 2px 7px; border-radius: 999px; border: 1px solid var(--border); width: max-content; color: var(--ink); }
+.pill i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 8px; padding: 2px; background: var(--page); gap: 2px; }
+.seg button {
+  font: 500 12.5px/1 var(--font-body); color: var(--ink-2); background: transparent; border: 0;
+  padding: 7px 10px; border-radius: 6px; cursor: pointer;
+}
+.seg button:hover { background: var(--accent-wash); color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--border); font-weight: 650; }
+button:focus-visible, tr:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.key-line { width: 16px; height: 2px; border-radius: 2px; display: inline-block; }
+.key-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.key-bar { width: 3px; height: 12px; display: inline-block; border-radius: 1px; }
+
+.chart { position: relative; width: 100%; min-width: 0; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { font-family: var(--font-data); font-size: 11px; fill: var(--muted); }
+.tip {
+  position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+  min-width: 170px; display: grid; gap: 3px; z-index: 5;
+}
+.tip[hidden] { display: none; }
+.tip .row { display: flex; justify-content: space-between; gap: 14px; }
+.tip .row span:first-child { color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.tip .row span:last-child { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.tip .head { font-family: var(--font-data); font-size: 11.5px; color: var(--muted); }
+
+/* scorecard */
+.table-wrap { overflow-x: auto; min-width: 0; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th { text-align: right; font-weight: 500; font-size: 12px; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--axis); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+td { padding: 9px 10px; border-bottom: 1px solid var(--grid); text-align: right; font-family: var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td:first-child { font-family: var(--font-body); font-weight: 600; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--accent-wash); }
+tbody tr.sel { background: var(--accent-wash); box-shadow: inset 3px 0 0 var(--accent); }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.chip i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.chip.pass i { background: var(--good); }
+.chip.fail i { background: var(--crit); border-radius: 1px; transform: rotate(45deg); }
+.best { font-weight: 600; color: var(--ink); }
+.foot { font-size: 12.5px; color: var(--muted); max-width: 90ch; }
+
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.findings { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.finding { display: grid; gap: 6px; align-content: start; }
+.finding .big { font-family: var(--font-display); font-weight: 750; font-size: 26px; letter-spacing: -0.02em; font-variation-settings: "wdth" 85; }
+.finding p { color: var(--ink-2); font-size: 13.5px; }
+.methods { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px 24px; }
+.methods div { display: grid; gap: 4px; align-content: start; }
+.methods p { font-size: 13.5px; color: var(--ink-2); }
+
+@media (max-width: 900px) {
+  .kpis { grid-template-columns: 1fr 1fr; }
+  .kpi:nth-child(3) { border-left: 0; }
+  .kpi:nth-child(n+3) { border-top: 1px solid var(--grid); }
+  .two, .findings { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  .kpis { grid-template-columns: 1fr; }
+  .kpi + .kpi { border-left: 0; border-top: 1px solid var(--grid); }
+  .kpi.hero .value { font-size: 40px; }
+  .panel { padding: 16px; }
+}
+@media (prefers-reduced-motion: no-preference) { .seg button { transition: background .15s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Market risk report · USD base</span>
+    <h1>FX Risk Engine</h1>
+    <p class="sub">Daily Value-at-Risk and Expected Shortfall for a hypothetical US company's net foreign-currency exposure, estimated five ways and backtested out of sample against 18 years of realised P&amp;L.</p>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section class="kpis" id="kpis" aria-label="Current risk"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Backtest: forecast vs. realised P&amp;L</h2>
+        <p>Each day's VaR uses only data available the evening before. A dot marks a day when the loss exceeded the forecast.</p>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="seg" id="modelSeg" role="group" aria-label="Model"></div>
+      <div class="seg" id="alphaSeg" role="group" aria-label="Confidence level"></div>
+      <div class="seg" id="rangeSeg" role="group" aria-label="Date range"></div>
+    </div>
+    <div class="legend" id="mainLegend"></div>
+    <div class="chart" id="mainChart"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Model scorecard</h2>
+        <p id="scoreIntro"></p>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="score"></table></div>
+    <p class="foot">Kupiec tests whether the exception rate matches the target. Christoffersen tests whether exceptions cluster in time. Conditional coverage combines both. Z2 (Acerbi–Székely) checks the size of tail losses against Expected Shortfall: near 0 is good, below −0.70 rejects at roughly 5%. Quantile loss is the average pinball loss of the VaR forecast; lower is better. Click a row to chart that model.</p>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Basel traffic light</h2>
+        <p>99% VaR exceptions in the trailing 250 trading days. Regulators add capital charges in the yellow zone and question the model in the red.</p>
+      </div>
+      <div class="legend" id="basLegend"></div>
+    </div>
+    <div class="chart" id="basChart"></div>
+  </section>
+
+  <div class="two">
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Where the risk comes from</h2>
+          <p>Component 99% VaR (EWMA covariance). Components add up to portfolio VaR; negative bars are positions that offset the rest of the book.</p>
+        </div>
+      </div>
+      <div class="legend"><span><i class="key-bar" style="background:var(--loss)"></i>Adds risk</span><span><i class="key-bar" style="background:var(--gain)"></i>Offsets risk</span></div>
+      <div class="chart" id="compChart"></div>
+      <div class="table-wrap"><table id="compTable"></table></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Stress tests</h2>
+          <p>Today's exposures revalued under actual historical moves and hypothetical shocks. Hover a bar for the currency moves behind it.</p>
+        </div>
+      </div>
+      <div class="legend"><span><i class="key-bar" style="background:var(--loss)"></i>Loss</span><span><i class="key-bar" style="background:var(--gain)"></i>Gain</span><span><i class="key-line" style="background:var(--ink-2)"></i>Today's 99% VaR</span></div>
+      <div class="chart" id="stressChart"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Currency correlations today</h2>
+        <p>EWMA correlation of daily returns against the dollar. High positive values mean those positions move together and add to each other's risk.</p>
+      </div>
+      <div class="legend"><span><i class="key-bar" style="background:var(--gain);width:12px"></i>−1</span><span><i class="key-bar" style="background:var(--mid);width:12px"></i>0</span><span><i class="key-bar" style="background:var(--loss);width:12px"></i>+1</span></div>
+    </div>
+    <div class="table-wrap"><div class="chart" id="corrChart" style="min-width:420px;max-width:640px"></div></div>
+  </section>
+
+  <section class="panel">
+    <h2>What the backtest shows</h2>
+    <div class="findings" id="findings"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Method</h2>
+    <div class="methods" id="methods"></div>
+  </section>
+</div>
+
+<script>
+const R = /*__DATA__*/null;
+const NS = "http://www.w3.org/2000/svg";
+const MODELS = ["hs", "normal", "ewma", "fhs", "garch_t"];
+const DESC = {
+  hs: "Empirical 1st percentile of the last 500 days of P&L. No distribution assumed, slow to react.",
+  normal: "Normal distribution with volatility from an equally weighted 500-day window (variance–covariance).",
+  ewma: "RiskMetrics: normal distribution, volatility from exponentially weighted squared returns, λ = 0.94.",
+  fhs: "Filtered historical simulation: past shocks standardised by EWMA volatility, rescaled to today's volatility.",
+  garch_t: "GARCH(1,1) with Student-t errors, re-estimated every 20 days on a rolling 1,000-day window.",
+};
+const state = { model: "fhs", alpha: "0.99", range: "all" };
+try { const s = JSON.parse(localStorage.getItem("fxrisk-view") || "{}"); Object.assign(state, s); } catch (e) {}
+const save = () => { try { localStorage.setItem("fxrisk-view", JSON.stringify(state)); } catch (e) {} };
+
+/* ---------- formatting ---------- */
+const $ = (id) => document.getElementById(id);
+const cssv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function money(v, digits) {
+  const a = Math.abs(v), sign = v < 0 ? "−" : "";
+  if (a >= 1e6) return sign + "$" + (a / 1e6).toFixed(digits ?? (a >= 1e7 ? 1 : 2)) + "M";
+  if (a >= 1e3) return sign + "$" + (a / 1e3).toFixed(digits ?? 0) + "K";
+  return sign + "$" + a.toFixed(0);
+}
+const pct = (v, d = 1) => (v * 100).toFixed(d) + "%";
+const fmtDate = (s) => new Date(s + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+const pfmt = (p) => p < 0.001 ? "<0.001" : p.toFixed(3);
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function niceTicks(lo, hi, n = 5) {
+  const span = hi - lo, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= n) || 10 * mag;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+function tipAt(box, tip, x, y) {
+  const w = box.clientWidth, tw = tip.offsetWidth;
+  tip.style.left = Math.min(Math.max(0, x + 14), w - tw) + "px";
+  tip.style.top = Math.max(0, y - 10) + "px";
+}
+
+/* ---------- header + KPIs ---------- */
+function renderHeader() {
+  const m = R.meta;
+  $("meta").innerHTML = [
+    `Gross exposure <b>${money(m.gross_exposure, 0)}</b>`,
+    `Currencies <b>${Object.keys(m.exposures).join(" ")}</b>`,
+    `Data <b>${fmtDate(m.data_start)} – ${fmtDate(m.data_end)}</b>`,
+    `Forecast for <b>${fmtDate(m.forecast_for)}</b>`,
+  ].map((s) => `<span>${s}</span>`).join("");
+}
+function zoneOf(n) { return n <= 4 ? ["Green", "var(--good)"] : n <= 9 ? ["Yellow", "var(--warn)"] : ["Red", "var(--crit)"]; }
+function renderKpis() {
+  const c = R.current[state.model], b99 = R.backtest["0.99"][state.model], a = R.attribution;
+  const [zn, zc] = zoneOf(b99.current_250d_exceptions);
+  const lab = R.model_labels[state.model];
+  $("kpis").innerHTML = `
+    <div class="kpi hero"><span class="label">1-day 99% VaR · ${lab}</span>
+      <span class="value">${money(c["0.99"].var)}</span>
+      <span class="note">${pct(c["0.99"].var / R.meta.gross_exposure, 2)} of gross. Expect a loss this large about 2–3 days a year.</span></div>
+    <div class="kpi"><span class="label">97.5% Expected Shortfall</span>
+      <span class="value">${money(c["0.975"].es)}</span>
+      <span class="note">Average loss on the worst 2.5% of days</span></div>
+    <div class="kpi"><span class="label">Backtest zone, last 250 days</span>
+      <span class="value">${b99.current_250d_exceptions} <span style="font-size:15px;font-weight:500;color:var(--ink-2)">exceptions</span></span>
+      <span class="pill"><i style="background:${zc}"></i>${zn} zone</span></div>
+    <div class="kpi"><span class="label">Diversification benefit</span>
+      <span class="value">${money(a.diversification_benefit)}</span>
+      <span class="note">${pct(a.diversification_pct, 0)} less than the sum of standalone VaRs</span></div>`;
+}
+
+/* ---------- controls ---------- */
+const RANGES = { all: ["Full history", null, null], gfc: ["2008–09 crisis", "2008-01-01", "2009-12-31"],
+  covid: ["2020 COVID", "2020-01-01", "2020-12-31"], y22: ["2022 dollar surge", "2021-10-01", "2023-06-30"],
+  recent: ["Last 2 years", null, "recent"] };
+function seg(id, items, key, onPick) {
+  const box = $(id); box.innerHTML = "";
+  for (const [val, label] of items) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; b.setAttribute("aria-pressed", String(state[key] === val));
+    b.addEventListener("click", () => { state[key] = val; save(); onPick(); });
+    box.appendChild(b);
+  }
+}
+function renderControls() {
+  seg("modelSeg", MODELS.map((m) => [m, R.model_labels[m]]), "model", renderAll);
+  seg("alphaSeg", [["0.99", "99%"], ["0.975", "97.5%"]], "alpha", renderAll);
+  seg("rangeSeg", Object.entries(RANGES).map(([k, v]) => [k, v[0]]), "range", renderAll);
+}
+
+/* ---------- main backtest chart ---------- */
+const TS = R ? R.timeseries : null;
+const T_MS = TS ? TS.dates.map((d) => Date.parse(d + "T00:00:00Z")) : [];
+function rangeIdx() {
+  const [, s, e] = RANGES[state.range];
+  let i0 = 0, i1 = TS.dates.length - 1;
+  if (e === "recent") { i0 = Math.max(0, i1 - 504); }
+  else if (s) { i0 = TS.dates.findIndex((d) => d >= s); const j = TS.dates.findIndex((d) => d > e); i1 = j < 0 ? i1 : j - 1; }
+  return [i0, i1];
+}
+function renderMain() {
+  const box = $("mainChart"); box.innerHTML = "";
+  const W = Math.max(320, box.clientWidth), H = W < 600 ? 300 : 380;
+  const m = { l: 58, r: 12, t: 10, b: 26 };
+  const [i0, i1] = rangeIdx();
+  const pnl = TS.pnl, varS = TS.var[state.model][state.alpha], esS = TS.es[state.model][state.alpha];
+  let lo = 0, hi = 0;
+  for (let i = i0; i <= i1; i++) {
+    lo = Math.min(lo, pnl[i], varS[i] == null ? 0 : -varS[i], esS[i] == null ? 0 : -esS[i]);
+    hi = Math.max(hi, pnl[i]);
+  }
+  const ticks = niceTicks(lo, hi, 6); lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
+  const x0 = T_MS[i0], x1 = T_MS[i1];
+  const X = (t) => m.l + (t - x0) / (x1 - x0) * (W - m.l - m.r);
+  const Y = (v) => m.t + (hi - v) / (hi - lo) * (H - m.t - m.b);
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Daily P&L with VaR forecast" }, box);
+  for (const t of ticks) {
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t), stroke: t === 0 ? cssv("--axis") : cssv("--grid"), "stroke-width": 1 }, svg);
+    const tx = el("text", { x: m.l - 8, y: Y(t) + 4, "text-anchor": "end" }, svg); tx.textContent = money(t * 1e3, Math.abs(t) >= 1e3 ? 1 : 0);
+  }
+  // year ticks
+  const y0 = new Date(x0).getUTCFullYear(), y1 = new Date(x1).getUTCFullYear();
+  const span = y1 - y0, stepY = span > 12 ? 2 : 1;
+  const monthly = span < 2;
+  if (monthly) {
+    const d = new Date(x0); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1);
+    const every = (x1 - x0) / 864e5 > 400 ? 3 : 2;
+    for (let k = 0; d.getTime() <= x1; k++, d.setUTCMonth(d.getUTCMonth() + 1)) {
+      if (d.getUTCMonth() % every) continue;
+      const tx = el("text", { x: X(d.getTime()), y: H - 6, "text-anchor": "middle" }, svg);
+      tx.textContent = d.toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: "UTC" });
+    }
+  } else {
+    for (let y = y0 + 1; y <= y1; y += 1) {
+      if ((y - y0 - 1) % stepY) continue;
+      const tx = el("text", { x: X(Date.UTC(y, 0, 1)), y: H - 6, "text-anchor": "middle" }, svg); tx.textContent = y;
+    }
+  }
+  // P&L spikes
+  let d = "";
+  for (let i = i0; i <= i1; i++) d += `M${X(T_MS[i]).toFixed(1)} ${Y(0).toFixed(1)}V${Y(pnl[i]).toFixed(1)}`;
+  el("path", { d, stroke: cssv("--pnl"), "stroke-width": i1 - i0 > 1500 ? 0.6 : 1.2, fill: "none" }, svg);
+  // ES + VaR lines
+  const line = (s, color, w, dash) => {
+    let p = "", pen = false;
+    for (let i = i0; i <= i1; i++) {
+      if (s[i] == null) { pen = false; continue; }
+      p += (pen ? "L" : "M") + X(T_MS[i]).toFixed(1) + " " + Y(-s[i]).toFixed(1); pen = true;
+    }
+    el("path", { d: p, stroke: color, "stroke-width": w, fill: "none", "stroke-linejoin": "round", "stroke-linecap": "round", ...(dash ? { "stroke-opacity": 0.85 } : {}) }, svg);
+  };
+  line(esS, cssv("--series-2"), 1.5, true);
+  line(varS, cssv("--accent"), 2);
+  // exceptions
+  let nHit = 0;
+  for (let i = i0; i <= i1; i++) {
+    if (varS[i] != null && -pnl[i] > varS[i]) {
+      nHit++;
+      el("circle", { cx: X(T_MS[i]), cy: Y(pnl[i]), r: 4, fill: cssv("--loss"), stroke: cssv("--surface"), "stroke-width": 2 }, svg);
+    }
+  }
+  const lab = R.model_labels[state.model], conf = state.alpha === "0.99" ? "99%" : "97.5%";
+  const expected = (i1 - i0 + 1) * (1 - +state.alpha);
+  $("mainLegend").innerHTML = `
+    <span><i class="key-bar" style="background:var(--pnl)"></i>Daily P&amp;L</span>
+    <span><i class="key-line" style="background:var(--accent)"></i>${conf} VaR · ${lab}</span>
+    <span><i class="key-line" style="background:var(--series-2)"></i>${conf} Expected Shortfall</span>
+    <span><i class="key-dot" style="background:var(--loss)"></i>Exceptions: <b class="mono" style="color:var(--ink);font-weight:500">${nHit}</b>&nbsp;(expected ${expected.toFixed(0)})</span>`;
+  // hover
+  const cross = el("line", { y1: m.t, y2: H - m.b, stroke: cssv("--axis"), "stroke-width": 1, visibility: "hidden" }, svg);
+  const dot = el("circle", { r: 4.5, fill: cssv("--accent"), stroke: cssv("--surface"), "stroke-width": 2, visibility: "hidden" }, svg);
+  const hit = el("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent" }, svg);
+  const tip = document.createElement("div"); tip.className = "tip"; tip.hidden = true; box.appendChild(tip);
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width;
+    const t = x0 + (sx - m.l) / (W - m.l - m.r) * (x1 - x0);
+    let a = i0, b = i1; while (b - a > 1) { const c = (a + b) >> 1; if (T_MS[c] < t) a = c; else b = c; }
+    const i = Math.abs(T_MS[a] - t) < Math.abs(T_MS[b] - t) ? a : b;
+    const px = X(T_MS[i]);
+    cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("visibility", "visible");
+    if (varS[i] != null) { dot.setAttribute("cx", px); dot.setAttribute("cy", Y(-varS[i])); dot.setAttribute("visibility", "visible"); }
+    const exc = varS[i] != null && -pnl[i] > varS[i];
+    tip.innerHTML = `<div class="head">${fmtDate(TS.dates[i])}</div>
+      <div class="row"><span><i class="key-bar" style="background:var(--pnl)"></i>P&amp;L</span><span>${money(pnl[i] * 1e3)}</span></div>
+      <div class="row"><span><i class="key-line" style="background:var(--accent)"></i>VaR</span><span>${varS[i] == null ? "–" : money(-varS[i] * 1e3)}</span></div>
+      <div class="row"><span><i class="key-line" style="background:var(--series-2)"></i>ES</span><span>${esS[i] == null ? "–" : money(-esS[i] * 1e3)}</span></div>
+      ${exc ? `<div class="row"><span><i class="key-dot" style="background:var(--loss)"></i>Exception</span><span>${(-pnl[i] / varS[i]).toFixed(2)}× VaR</span></div>` : ""}`;
+    tip.hidden = false;
+    tipAt(box, tip, px * r.width / W, (ev.clientY - r.top));
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+}
+
+/* ---------- scorecard ---------- */
+function renderScore() {
+  const A = state.alpha, bt = R.backtest[A], is99 = A === "0.99";
+  const best = MODELS.reduce((a, b) => bt[a].quantile_loss < bt[b].quantile_loss ? a : b);
+  $("scoreIntro").textContent = `${is99 ? "99%" : "97.5%"} one-day VaR, ${bt.fhs.days.toLocaleString()} trading days from ${fmtDate(R.meta.backtest_start)}. A pass means the test does not reject the model at the 5% level.`;
+  const chip = (ok, txt) => `<span class="chip ${ok ? "pass" : "fail"}"><i></i>${txt}</span>`;
+  let h = `<thead><tr><th>Model</th><th>Exceptions</th><th>Expected</th><th>Rate</th><th>Kupiec p</th><th>Christoffersen p</th><th>Cond. coverage</th><th>ES test Z2</th><th>Quantile loss</th>${is99 ? "<th>Days in red zone</th>" : ""}</tr></thead><tbody>`;
+  for (const k of MODELS) {
+    const b = bt[k];
+    h += `<tr tabindex="0" data-m="${k}" class="${k === state.model ? "sel" : ""}"><td>${R.model_labels[k]}</td>
+      <td>${b.exceptions}</td><td class="muted">${b.expected.toFixed(0)}</td><td>${pct(b.rate, 2)}</td>
+      <td>${chip(b.kupiec_p > 0.05, pfmt(b.kupiec_p))}</td>
+      <td>${chip(b.christoffersen_ind_p > 0.05, pfmt(b.christoffersen_ind_p))}</td>
+      <td>${chip(b.cond_coverage_p > 0.05, pfmt(b.cond_coverage_p))}</td>
+      <td>${chip(b.z2 > -0.7, b.z2.toFixed(2))}</td>
+      <td class="${k === best ? "best" : ""}">${(b.quantile_loss / 1e3).toFixed(1)}K${k === best ? " ★" : ""}</td>
+      ${is99 ? `<td>${pct(b.pct_days_red, 1)}</td>` : ""}</tr>`;
+  }
+  $("score").innerHTML = h + "</tbody>";
+  $("score").querySelectorAll("tbody tr").forEach((tr) => {
+    const pick = () => { state.model = tr.dataset.m; save(); renderAll(); };
+    tr.addEventListener("click", pick);
+    tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+  });
+}
+
+/* ---------- Basel chart ---------- */
+function renderBasel() {
+  const box = $("basChart"); box.innerHTML = "";
+  const W = Math.max(320, box.clientWidth), H = W < 600 ? 220 : 250, m = { l: 34, r: 64, t: 8, b: 26 };
+  const rd = R.rolling_exceptions_99, s1 = rd[state.model], s2 = rd.normal, dates = rd.dates;
+  const showRef = state.model !== "normal";
+  const ms = dates.map((d) => Date.parse(d + "T00:00:00Z"));
+  const top = Math.max(12, ...s1, ...(showRef ? s2 : [])) + 1;
+  const X = (t) => m.l + (t - ms[0]) / (ms[ms.length - 1] - ms[0]) * (W - m.l - m.r);
+  const Y = (v) => m.t + (top - v) / (top + 0.5) * (H - m.t - m.b);
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Rolling 250-day exceptions" }, box);
+  const zones = [[-0.5, 4.5, "--good", "Green", "0–4"], [4.5, 9.5, "--warn", "Yellow", "5–9"], [9.5, top, "--crit", "Red", "10+"]];
+  for (const [a, b, c, name, rng] of zones) {
+    el("rect", { x: m.l, width: W - m.l - m.r, y: Y(b), height: Y(a) - Y(b), fill: cssv(c), "fill-opacity": 0.09 }, svg);
+    const t = el("text", { x: W - m.r + 8, y: (Y(a) + Y(Math.min(b, a + 5))) / 2 + 4 }, svg); t.textContent = `${name} ${rng}`;
+  }
+  for (const t of niceTicks(0, top, 4)) {
+    const tx = el("text", { x: m.l - 8, y: Y(t) + 4, "text-anchor": "end" }, svg); tx.textContent = t;
+  }
+  const y0 = new Date(ms[0]).getUTCFullYear(), y1 = new Date(ms[ms.length - 1]).getUTCFullYear();
+  for (let y = y0 + 1; y <= y1; y += 2) { const tx = el("text", { x: X(Date.UTC(y, 0, 1)), y: H - 6, "text-anchor": "middle" }, svg); tx.textContent = y; }
+  const step = (s, color) => {
+    let p = `M${X(ms[0])} ${Y(s[0])}`;
+    for (let i = 1; i < s.length; i++) if (s[i] !== s[i - 1]) p += `H${X(ms[i]).toFixed(1)}V${Y(s[i]).toFixed(1)}`;
+    p += `H${X(ms[ms.length - 1])}`;
+    el("path", { d: p, stroke: color, "stroke-width": 2, fill: "none", "stroke-linejoin": "round" }, svg);
+  };
+  if (showRef) step(s2, cssv("--series-2"));
+  step(s1, cssv("--accent"));
+  $("basLegend").innerHTML = `<span><i class="key-line" style="background:var(--accent)"></i>${R.model_labels[state.model]}</span>` +
+    (showRef ? `<span><i class="key-line" style="background:var(--series-2)"></i>Parametric normal (reference)</span>` : "");
+  const cross = el("line", { y1: m.t, y2: H - m.b, stroke: cssv("--axis"), visibility: "hidden" }, svg);
+  const hit = el("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent" }, svg);
+  const tip = document.createElement("div"); tip.className = "tip"; tip.hidden = true; box.appendChild(tip);
+  hit.addEventListener("pointermove", (ev) => {
+    const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width;
+    const t = ms[0] + (sx - m.l) / (W - m.l - m.r) * (ms[ms.length - 1] - ms[0]);
+    let a = 0, b = ms.length - 1; while (b - a > 1) { const c = (a + b) >> 1; if (ms[c] < t) a = c; else b = c; }
+    const px = X(ms[a]); cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("visibility", "visible");
+    const z = zoneOf(s1[a]);
+    tip.innerHTML = `<div class="head">250 days to ${fmtDate(dates[a])}</div>
+      <div class="row"><span><i class="key-line" style="background:var(--accent)"></i>${R.model_labels[state.model]}</span><span>${s1[a]} · ${z[0]}</span></div>
+      ${showRef ? `<div class="row"><span><i class="key-line" style="background:var(--series-2)"></i>Normal</span><span>${s2[a]} · ${zoneOf(s2[a])[0]}</span></div>` : ""}`;
+    tip.hidden = false; tipAt(box, tip, px * r.width / W, ev.clientY - r.top);
+  });
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); });
+}
+
+/* ---------- horizontal diverging bars (component VaR, stress) ---------- */
+function hbars(boxId, rows, opts) {
+  const box = $(boxId); box.innerHTML = "";
+  const W = Math.max(300, box.clientWidth), rowH = 30, labW = opts.labelW(W);
+  const H = rows.length * rowH + 40, m = { l: labW, r: 14, t: 14, b: 24 };
+  let lo = Math.min(0, ...rows.map((r) => r.v), ...(opts.refs || []).map((r) => r.v));
+  let hi = Math.max(0, ...rows.map((r) => r.v));
+  const pad = (hi - lo) * 0.3; lo -= lo < 0 ? pad : 0; hi += hi > 0 ? pad : 0;
+  const X = (v) => m.l + (v - lo) / (hi - lo) * (W - m.l - m.r);
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opts.aria }, box);
+  for (const t of niceTicks(lo, hi, W < 420 ? 3 : 5)) {
+    el("line", { x1: X(t), x2: X(t), y1: m.t, y2: H - m.b, stroke: t === 0 ? cssv("--axis") : cssv("--grid") }, svg);
+    const tx = el("text", { x: X(t), y: H - 6, "text-anchor": "middle" }, svg); tx.textContent = money(t, 0);
+  }
+  for (const ref of opts.refs || []) {
+    el("line", { x1: X(ref.v), x2: X(ref.v), y1: m.t, y2: H - m.b, stroke: cssv("--ink-2"), "stroke-width": 1.5 }, svg);
+  }
+  const tip = document.createElement("div"); tip.className = "tip"; tip.hidden = true; box.appendChild(tip);
+  rows.forEach((r, i) => {
+    const y = m.t + i * rowH + rowH / 2, bh = 16, x0 = X(0), x1 = X(r.v), w = Math.max(1, Math.abs(x1 - x0));
+    const left = Math.min(x0, x1), rad = Math.min(4, w / 2);
+    const neg = r.v < 0;
+    // rounded data-end, square at baseline
+    const pth = neg
+      ? `M${x0} ${y - bh / 2}H${left + rad}Q${left} ${y - bh / 2} ${left} ${y - bh / 2 + rad}V${y + bh / 2 - rad}Q${left} ${y + bh / 2} ${left + rad} ${y + bh / 2}H${x0}Z`
+      : `M${x0} ${y - bh / 2}H${x1 - rad}Q${x1} ${y - bh / 2} ${x1} ${y - bh / 2 + rad}V${y + bh / 2 - rad}Q${x1} ${y + bh / 2} ${x1 - rad} ${y + bh / 2}H${x0}Z`;
+    el("path", { d: pth, fill: cssv(opts.colorOf(r)) }, svg);
+    const lt = el("text", { x: m.l - 10, y: y + 4, "text-anchor": "end", style: `fill:var(--ink-2);font-family:var(--font-body);font-size:12.5px` }, svg);
+    lt.textContent = r.label;
+    const vt = el("text", { x: neg ? left - 6 : x1 + 6, y: y + 4, "text-anchor": neg ? "end" : "start", style: "fill:var(--ink)" }, svg);
+    vt.textContent = money(r.v);
+    const hitR = el("rect", { x: 0, y: y - rowH / 2, width: W, height: rowH, fill: "transparent" }, svg);
+    if (opts.tip) {
+      hitR.addEventListener("pointermove", (ev) => {
+        const rr = svg.getBoundingClientRect(); tip.innerHTML = opts.tip(r); tip.hidden = false;
+        tipAt(box, tip, ev.clientX - rr.left, ev.clientY - rr.top);
+      });
+      hitR.addEventListener("pointerleave", () => { tip.hidden = true; });
+    }
+  });
+  for (const ref of opts.refs || []) {
+    const t = el("text", { x: X(ref.v) - 5, y: m.t + 10, "text-anchor": "end", style: "fill:var(--ink-2)" }, svg); t.textContent = ref.label;
+  }
+}
+function renderComp() {
+  const tbl = [...R.attribution.table].sort((a, b) => b.component_var - a.component_var);
+  hbars("compChart", tbl.map((r) => ({ label: r.ccy, v: r.component_var, r })), {
+    labelW: () => 48, aria: "Component VaR by currency",
+    colorOf: (r) => (r.v >= 0 ? "--loss" : "--gain"),
+    tip: (x) => `<div class="head">${x.label}</div>
+      <div class="row"><span>Exposure</span><span>${money(x.r.exposure)}</span></div>
+      <div class="row"><span>Volatility (ann.)</span><span>${pct(x.r.ann_vol)}</span></div>
+      <div class="row"><span>Standalone VaR</span><span>${money(x.r.standalone_var)}</span></div>
+      <div class="row"><span>Component VaR</span><span>${money(x.r.component_var)}</span></div>
+      <div class="row"><span>Share of total</span><span>${pct(x.r.pct_of_total)}</span></div>`,
+  });
+  let h = `<thead><tr><th>Currency</th><th>Exposure</th><th>Vol (ann.)</th><th>Standalone</th><th>Component</th><th>Share</th></tr></thead><tbody>`;
+  for (const r of tbl) h += `<tr style="cursor:default"><td>${r.ccy}</td><td>${money(r.exposure)}</td><td>${pct(r.ann_vol)}</td><td>${money(r.standalone_var)}</td><td>${money(r.component_var)}</td><td>${pct(r.pct_of_total)}</td></tr>`;
+  h += `<tr style="cursor:default"><td>Portfolio</td><td>${money(R.meta.net_exposure)} net</td><td></td><td>${money(R.attribution.sum_standalone_var)}</td><td>${money(R.attribution.portfolio_var)}</td><td>100%</td></tr>`;
+  $("compTable").innerHTML = h + "</tbody>";
+}
+function renderStress() {
+  const ccys = Object.keys(R.meta.exposures);
+  const rows = [...R.stress].sort((a, b) => a.pnl - b.pnl).map((s) => ({ label: s.scenario, v: s.pnl, s }));
+  const v99 = R.current[state.model]["0.99"].var;
+  hbars("stressChart", rows, {
+    labelW: (W) => (W < 420 ? 150 : 196), aria: "Stress test P&L",
+    colorOf: (r) => (r.v < 0 ? "--loss" : "--gain"),
+    refs: [{ v: -v99, label: "VaR" }],
+    tip: (x) => {
+      const s = x.s, moves = ccys.filter((c) => Math.abs(s["move_" + c]) > 1e-9)
+        .map((c) => `<div class="row"><span>${c}</span><span>${(s["move_" + c] >= 0 ? "+" : "") + (s["move_" + c] * 100).toFixed(1)}% · ${money(s["pnl_" + c])}</span></div>`).join("");
+      return `<div class="head">${s.window}${s.note ? " · " + s.note : ""}</div>
+        <div class="row"><span><b>P&amp;L</b></span><span><b>${money(s.pnl)}</b></span></div>
+        <div class="row"><span>Multiple of 99% VaR</span><span>${(Math.abs(s.pnl) / v99).toFixed(1)}×</span></div>${moves}`;
+    },
+  });
+}
+
+/* ---------- correlation heatmap ---------- */
+function mix(a, b, t) {
+  const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const A = p(a), B = p(b);
+  return "rgb(" + A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(",") + ")";
+}
+function renderCorr() {
+  const box = $("corrChart"); box.innerHTML = "";
+  const L = R.correlation.labels, M = R.correlation.matrix, n = L.length;
+  const W = Math.max(420, Math.min(640, box.clientWidth)), lab = 40, cell = (W - lab) / n, H = lab + cell * n;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Correlation matrix" }, box);
+  const mid = cssv("--mid"), pos = cssv("--loss"), neg = cssv("--gain"), surf = cssv("--surface");
+  const tip = document.createElement("div"); tip.className = "tip"; tip.hidden = true; box.appendChild(tip);
+  L.forEach((c, i) => {
+    const t1 = el("text", { x: lab + cell * i + cell / 2, y: lab - 10, "text-anchor": "middle" }, svg); t1.textContent = c;
+    const t2 = el("text", { x: lab - 8, y: lab + cell * i + cell / 2 + 4, "text-anchor": "end" }, svg); t2.textContent = c;
+    for (let j = 0; j < n; j++) {
+      const v = M[i][j], fill = i === j ? mid : mix(mid, v >= 0 ? pos : neg, Math.min(1, Math.abs(v)));
+      const r = el("rect", { x: lab + cell * j + 1, y: lab + cell * i + 1, width: cell - 2, height: cell - 2, rx: 3, fill }, svg);
+      const t = el("text", { x: lab + cell * j + cell / 2, y: lab + cell * i + cell / 2 + 4, "text-anchor": "middle",
+        style: `fill:${Math.abs(v) > 0.55 && i !== j ? "#ffffff" : "var(--ink)"};font-size:${cell < 52 ? 10.5 : 12}px` }, svg);
+      t.textContent = i === j ? "–" : v.toFixed(2).replace("-", "−");
+      r.addEventListener("pointermove", (ev) => {
+        const rr = svg.getBoundingClientRect();
+        tip.innerHTML = `<div class="head">${L[i]} vs ${L[j]}</div><div class="row"><span>Correlation</span><span>${v.toFixed(2)}</span></div>
+          <div class="row"><span>Exposures</span><span>${money(R.meta.exposures[L[i]])} / ${money(R.meta.exposures[L[j]])}</span></div>`;
+        tip.hidden = false; tipAt(box, tip, ev.clientX - rr.left, ev.clientY - rr.top);
+      });
+      r.addEventListener("pointerleave", () => { tip.hidden = true; });
+    }
+  });
+}
+
+/* ---------- findings + methods ---------- */
+function renderText() {
+  const b = R.backtest["0.99"], ps = R.pnl_stats, w = R.worst_10d, a = R.attribution;
+  const eur = R.attribution.table.find((r) => r.ccy === "EUR");
+  $("findings").innerHTML = `
+    <div class="finding"><span class="big">${b.normal.exceptions} vs ${b.normal.expected.toFixed(0)}</span>
+      <p>The textbook normal model saw twice as many 99% breaches as it promised and spent ${pct(b.normal.pct_days_red, 0)} of days in the Basel red zone. Daily P&amp;L has excess kurtosis of ${ps.excess_kurtosis.toFixed(1)}: tail days happen far more often than a bell curve allows.</p></div>
+    <div class="finding"><span class="big">${b.fhs.exceptions} vs ${b.fhs.expected.toFixed(0)}</span>
+      <p>Filtered historical simulation, which scales real past shocks to today's volatility, is the only model that passes all three coverage tests (Kupiec p = ${b.fhs.kupiec_p.toFixed(2)}, conditional coverage p = ${b.fhs.cond_coverage_p.toFixed(2)}) and never entered the red zone. Its ES test statistic is ${b.fhs.z2.toFixed(2)}, close to the ideal of 0.</p></div>
+    <div class="finding"><span class="big">${pct(eur.pct_of_total, 0)}</span>
+      <p>The euro position drives the largest share of today's risk. The CHF loan offsets ${pct(-R.attribution.table.find((r) => r.ccy === "CHF").pct_of_total, 0)} because the franc tends to move with the euro. The worst 10-day loss this book would have taken was ${money(w.pnl)} (${fmtDate(w.start)} to ${fmtDate(w.end)}), about ${(Math.abs(w.pnl) / R.current.fhs["0.99"].var).toFixed(0)}× today's one-day VaR.</p></div>`;
+  const items = [
+    ["Data", `${R.meta.source}. ${R.meta.n_obs.toLocaleString()} trading days of USD crosses; rates inverted so a rise means the foreign currency gained against the dollar.`],
+    ["Portfolio", `Constant USD exposures, rebalanced daily, so P&L is linear in currency returns. Long EUR, JPY, GBP, CAD, AUD, MXN revenue; short CHF (a franc-denominated loan) and CNY (supplier payables).`],
+    ["Models", MODELS.map((k) => `<b>${R.model_labels[k]}.</b> ${DESC[k]}`).join(" ")],
+    ["Backtest", `Out of sample from ${fmtDate(R.meta.backtest_start)} at 99% and 97.5%. Kupiec, Christoffersen and conditional-coverage likelihood-ratio tests; Acerbi–Székely Z2 for Expected Shortfall; Basel traffic light on rolling 250-day windows. GARCH parameters were re-estimated ${R.garch.n_refits} times (median persistence ${R.garch.median_persistence.toFixed(3)}, median t degrees of freedom ${R.garch.median_nu.toFixed(1)}).`],
+    ["Attribution", `Euler decomposition of normal VaR using an EWMA (λ = 0.94) covariance matrix, so currency components add up exactly to the portfolio total.`],
+    ["Limits", `One-day horizon only. Noon New York fixes, so moves that reverse intraday are missed. Exposures are held constant rather than following a real company's cash-flow calendar.`],
+  ];
+  $("methods").innerHTML = items.map(([h, p]) => `<div><h3>${h}</h3><p>${p}</p></div>`).join("");
+}
+
+function renderAll() {
+  renderControls(); renderKpis(); renderMain(); renderScore(); renderBasel(); renderStress();
+}
+if (R) {
+  if (!MODELS.includes(state.model)) state.model = "fhs";
+  if (!R.backtest[state.alpha]) state.alpha = "0.99";
+  if (!RANGES[state.range]) state.range = "all";
+  renderHeader(); renderText(); renderAll(); renderComp(); renderCorr();
+  let t; window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => { renderAll(); renderComp(); renderCorr(); }, 150); });
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  const rerender = () => { renderAll(); renderComp(); renderCorr(); };
+  mq.addEventListener?.("change", rerender);
+  new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+}
+</script>

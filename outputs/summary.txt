@@ -1,0 +1,18 @@
+Data 2003-01-03 to 2026-10-16 (5,964 days); gross exposure $115M
+
+One-day forecast for 2026-10-19:
+  Historical simulation      VaR99 $    831,489   ES97.5 $    798,011
+  Parametric normal          VaR99 $    709,909   ES97.5 $    713,404
+  EWMA (RiskMetrics)         VaR99 $    659,620   ES97.5 $    662,867
+  Filtered historical sim.   VaR99 $    903,226   ES97.5 $    803,327
+  GARCH(1,1)-t               VaR99 $    731,661   ES97.5 $    755,358
+
+99% backtest from 2008-01-02:
+  Historical simulation       52 exceptions (exp 47)  Kupiec p=0.475  CC p=0.000  red-zone days 4.2%
+  Parametric normal           95 exceptions (exp 47)  Kupiec p=0.000  CC p=0.000  red-zone days 15.1%
+  EWMA (RiskMetrics)          91 exceptions (exp 47)  Kupiec p=0.000  CC p=0.000  red-zone days 3.7%
+  Filtered historical sim.    48 exceptions (exp 47)  Kupiec p=0.888  CC p=0.803  red-zone days 0.0%
+  GARCH(1,1)-t                62 exceptions (exp 47)  Kupiec p=0.037  CC p=0.004  red-zone days 1.2%
+
+Diversification benefit: $386,467 (37% of standalone VaR)
+Worst 10-day loss on today's book: $-7,703,331 (2020-03-10 to 2020-03-23)
